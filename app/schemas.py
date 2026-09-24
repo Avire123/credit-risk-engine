@@ -3,11 +3,11 @@ from typing import Dict, List, Optional
 
 class LoanApplicationRequest(BaseModel):
     age: int = Field(..., ge=18, le=100, example=35)
-    annual_income: float = Field(..., gt=0, example=75000.0)
-    loan_amount: float = Field(..., gt=0, example=15000.0)
+    annual_income: float = Field(..., gt=0, example=750000.0)
+    loan_amount: float = Field(..., gt=0, example=150000.0)
     loan_term_months: int = Field(..., example=36)
     credit_score: int = Field(..., ge=300, le=850, example=710)
-    existing_debt: float = Field(..., ge=0, example=12000.0)
+    existing_debt: float = Field(..., ge=0, example=120000.0)
     derogatory_marks: int = Field(..., ge=0, example=0)
     employment_length_years: int = Field(..., ge=0, example=5)
 
@@ -15,11 +15,11 @@ class LoanApplicationRequest(BaseModel):
         json_schema_extra = {
             "example": {
                 "age": 35,
-                "annual_income": 85000.0,
-                "loan_amount": 20000.0,
+                "annual_income": 850000.0,
+                "loan_amount": 200000.0,
                 "loan_term_months": 36,
                 "credit_score": 720,
-                "existing_debt": 10000.0,
+                "existing_debt": 100000.0,
                 "derogatory_marks": 0,
                 "employment_length_years": 6
             }

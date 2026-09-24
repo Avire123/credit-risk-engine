@@ -112,6 +112,16 @@ The API will be available at:
 streamlit run dashboard/app.py
 ```
 
+### 6) Deploy to Streamlit Cloud
+
+Set the environment variable in Streamlit Cloud:
+
+```text
+API_BASE_URL=https://your-public-api-url
+```
+
+If you do not set it, the app falls back to `http://127.0.0.1:8000` for local testing.
+
 ## 📡 API endpoints
 
 ### Health check

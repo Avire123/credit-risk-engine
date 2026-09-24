@@ -85,6 +85,7 @@ selected_tab = st.sidebar.radio(
     ["Underwriter Simulator", "Portfolio Health Monitor", "Model Validation & Calibration", "API Audit Logs"],
 )
 
+st.sidebar.caption("Set API_BASE_URL to your hosted backend for deployment.")
 try:
     health_res = requests.get(f"{API_BASE_URL}/health", timeout=2)
     if health_res.status_code == 200:
