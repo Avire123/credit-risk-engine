@@ -1,0 +1,14 @@
+# Virtual Environment
+venv/
+.venv/
+
+# Python Cache
+__pycache__/
+*.pyc
+
+# Local Data & Database (Keep repo lightweight and protect audit data)
+data/
+*.duckdb
+
+# Streamlit Local Config
+.streamlit/

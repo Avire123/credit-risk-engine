@@ -13,7 +13,12 @@ An end-to-end credit underwriting and portfolio analytics project built with Pyt
 
 ## 🧠 Business use case
 
-The project is designed to mimic an AI-powered lending decision support system. It helps assess whether a borrower is likely to default and supports risk-based decisions such as:
+The project is designed to mimic an AI-powered lending decision support system for the Kenyan market. It helps assess whether a borrower is likely to default and supports risk-based decisions such as:
+
+- approving a loan in KSh
+- requesting manual review
+- denying a loan
+- recommending a credit limit in Kenyan shillings
 
 - approving a loan
 - requesting manual review
@@ -161,11 +166,11 @@ This project uses synthetic data for demonstration and educational purposes. In 
 
 ## ✅ Summary
 
-This repository demonstrates how to build a practical ML-backed credit risk solution that combines:
+This repository demonstrates how to build a practical ML-backed credit risk solution for Kenyan lending that combines:
 
 - model training
 - API deployment
 - explainability
 - portfolio monitoring
-- business-facing decision support
+- business-facing decision support in KSh
 

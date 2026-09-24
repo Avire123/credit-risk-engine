@@ -3,41 +3,98 @@ import json
 import requests
 import streamlit as st
 import pandas as pd
-import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+import joblib
+import shap
 
 API_BASE_URL = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
+CURRENCY_SYMBOL = "KSh"
+
+
+def format_currency(value):
+    return f"{CURRENCY_SYMBOL} {float(value):,.0f}"
+
+
+@st.cache_resource
+def load_model_artifact():
+    return joblib.load("models/credit_model.joblib")
+
+
+def local_predict(payload: dict):
+    artifact = load_model_artifact()
+    pipeline = artifact["pipeline"]
+    feature_names = artifact["feature_names"]
+
+    dti_ratio = (
+        payload["existing_debt"]
+        + (payload["loan_amount"] / payload["loan_term_months"])
+    ) / (payload["annual_income"] / 12)
+    loan_to_income = payload["loan_amount"] / payload["annual_income"]
+
+    full_payload = {
+        **payload,
+        "dti_ratio": round(dti_ratio, 4),
+        "loan_to_income": round(loan_to_income, 4),
+    }
+
+    input_df = pd.DataFrame([full_payload])[feature_names]
+    prob_default = float(pipeline.predict_proba(input_df)[0][1])
+
+    if prob_default < 0.15:
+        decision, tier = "Approved", "Low"
+    elif prob_default < 0.35:
+        decision, tier = "High Risk Review", "Medium"
+    else:
+        decision, tier = "Denied", "High"
+
+    credit_limit = (
+        round(max(0, payload["annual_income"] * 0.45 - payload["existing_debt"]), 2)
+        if decision != "Denied"
+        else 0.0
+    )
+
+    explainer = shap.TreeExplainer(pipeline.named_steps["classifier"])
+    transformed_input = pipeline.named_steps["preprocessor"].transform(input_df)
+    shap_vals = explainer.shap_values(transformed_input)[0]
+    shap_explanations = {
+        col: round(float(val), 4) for col, val in zip(feature_names, shap_vals)
+    }
+
+    return {
+        "default_probability": round(prob_default, 4),
+        "risk_tier": tier,
+        "decision": decision,
+        "recommended_credit_limit": credit_limit,
+        "shap_explanations": shap_explanations,
+    }
+
 
 st.set_page_config(
     page_title="Credit Risk & Portfolio Intelligence",
     page_icon="💳",
-    layout="wide"
+    layout="wide",
 )
 
 st.title("💳 AI Credit Risk Underwriting & Portfolio Intelligence")
 st.markdown("Real-time credit scoring engine, explainable AI (SHAP), and model risk validation.")
 
 # Sidebar Navigation
-tab_selection = st.sidebar.radio(
-    "Navigation", 
-    ["Underwriter Simulator", "Portfolio Health Monitor", "Model Validation & Calibration", "API Audit Logs"]
+selected_tab = st.sidebar.radio(
+    "Navigation",
+    ["Underwriter Simulator", "Portfolio Health Monitor", "Model Validation & Calibration", "API Audit Logs"],
 )
 
-# Check backend status
 try:
     health_res = requests.get(f"{API_BASE_URL}/health", timeout=2)
     if health_res.status_code == 200:
         st.sidebar.success("API Status: Connected 🟢")
     else:
-        st.sidebar.error("API Status: Degraded 🟡")
+        st.sidebar.warning("API Status: Degraded 🟡")
 except Exception:
-    st.sidebar.error("API Status: Offline 🔴 (Run 'uvicorn app.main:app' in terminal)")
+    st.sidebar.warning("API Status: Using Local Model Fallback 🟡")
 
-# -------------------------------------------------------------------
-# TAB 1: Live Underwriter Simulator
-# -------------------------------------------------------------------
-if tab_selection == "Underwriter Simulator":
+if selected_tab == "Underwriter Simulator":
     st.header("⚡ Live Loan Application Scoring")
     st.caption("Adjust borrower parameters to perform real-time model inference.")
 
@@ -46,11 +103,11 @@ if tab_selection == "Underwriter Simulator":
     with col1:
         st.subheader("Borrower & Loan Details")
         age = st.slider("Age", 18, 85, 35)
-        annual_income = st.number_input("Annual Income ($)", value=75000.0, step=5000.0)
-        loan_amount = st.number_input("Requested Loan Amount ($)", value=15000.0, step=1000.0)
+        annual_income = st.number_input("Annual Income (KSh)", value=750000.0, step=50000.0)
+        loan_amount = st.number_input("Requested Loan Amount (KSh)", value=150000.0, step=20000.0)
         loan_term_months = st.selectbox("Loan Term (Months)", [24, 36, 48, 60], index=1)
         credit_score = st.slider("Credit Score (FICO)", 300, 850, 710)
-        existing_debt = st.number_input("Existing Debt ($)", value=12000.0, step=1000.0)
+        existing_debt = st.number_input("Existing Debt (KSh)", value=120000.0, step=20000.0)
         derogatory_marks = st.selectbox("Derogatory Marks / Delinquencies", [0, 1, 2, 3], index=0)
         employment_length_years = st.slider("Employment Length (Years)", 0, 30, 5)
 
@@ -58,7 +115,7 @@ if tab_selection == "Underwriter Simulator":
 
     with col2:
         st.subheader("Underwriting Decision & SHAP Attribution")
-        
+
         if submit_btn:
             payload = {
                 "age": age,
@@ -68,100 +125,102 @@ if tab_selection == "Underwriter Simulator":
                 "credit_score": credit_score,
                 "existing_debt": existing_debt,
                 "derogatory_marks": derogatory_marks,
-                "employment_length_years": employment_length_years
+                "employment_length_years": employment_length_years,
             }
 
             try:
-                response = requests.post(f"{API_BASE_URL}/predict", json=payload)
+                response = requests.post(f"{API_BASE_URL}/predict", json=payload, timeout=3)
                 if response.status_code == 200:
                     data = response.json()
-                    decision = data["decision"]
-                    prob = data["default_probability"]
-                    
-                    if decision == "Approved":
-                        st.success(f"### Decision: APPROVED (Default Risk: {prob:.1%})")
-                    elif decision == "High Risk Review":
-                        st.warning(f"### Decision: HIGH RISK REVIEW (Default Risk: {prob:.1%})")
-                    else:
-                        st.error(f"### Decision: DENIED (Default Risk: {prob:.1%})")
-
-                    st.metric("Recommended Credit Limit", f"${data['recommended_credit_limit']:,.2f}")
-
-                    st.write("**Feature Impact Breakdown (SHAP Values)**")
-                    shap_df = pd.DataFrame(
-                        list(data["shap_explanations"].items()), 
-                        columns=["Feature", "SHAP Impact"]
-                    ).sort_values(by="SHAP Impact", ascending=True)
-
-                    fig = px.bar(
-                        shap_df, 
-                        x="SHAP Impact", 
-                        y="Feature", 
-                        orientation="h",
-                        color="SHAP Impact",
-                        color_continuous_scale="RdYlGn_r",
-                        title="Risk Contributors (Positive = Higher Default Risk)"
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
                 else:
-                    st.error("API error during prediction.")
-            except Exception as e:
-                st.error(f"Could not connect to FastAPI server: {str(e)}")
+                    raise Exception("Backend error")
+            except Exception:
+                data = local_predict(payload)
 
-# -------------------------------------------------------------------
-# TAB 2: Portfolio Health Monitor
-# -------------------------------------------------------------------
-elif tab_selection == "Portfolio Health Monitor":
+            decision = data["decision"]
+            prob = data["default_probability"]
+
+            if decision == "Approved":
+                st.success(f"### Decision: APPROVED (Default Risk: {prob:.1%})")
+            elif decision == "High Risk Review":
+                st.warning(f"### Decision: HIGH RISK REVIEW (Default Risk: {prob:.1%})")
+            else:
+                st.error(f"### Decision: DENIED (Default Risk: {prob:.1%})")
+
+            st.metric("Recommended Credit Limit", format_currency(data["recommended_credit_limit"]))
+
+            st.write("**Feature Impact Breakdown (SHAP Values)**")
+            shap_df = pd.DataFrame(
+                list(data["shap_explanations"].items()),
+                columns=["Feature", "SHAP Impact"],
+            ).sort_values(by="SHAP Impact", ascending=True)
+
+            fig = px.bar(
+                shap_df,
+                x="SHAP Impact",
+                y="Feature",
+                orientation="h",
+                color="SHAP Impact",
+                color_continuous_scale="RdYlGn_r",
+                title="Risk Contributors (Positive = Higher Default Risk)",
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+elif selected_tab == "Portfolio Health Monitor":
     st.header("📊 Macro-Level Portfolio Analytics")
-    
+
     try:
-        res = requests.get(f"{API_BASE_URL}/portfolio-metrics")
-        if res.status_code == 200:
-            metrics = res.json()
-            
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Total Loans Evaluated", metrics["total_loans_evaluated"])
-            m2.metric("Overall Approval Rate", f"{metrics['approval_rate']:.1%}")
-            m3.metric("Average Default Risk", f"{metrics['average_default_probability']:.1%}")
+        metrics_res = requests.get(f"{API_BASE_URL}/portfolio-metrics", timeout=3)
+        if metrics_res.status_code == 200:
+            metrics = metrics_res.json()
+        else:
+            raise Exception("API unavailable")
+    except Exception:
+        metrics = {
+            "total_loans_evaluated": 0,
+            "approval_rate": 0.0,
+            "average_default_probability": 0.0,
+            "exposure_by_risk_tier": {"Low": 0.0, "Medium": 0.0, "High": 0.0},
+            "recent_logs": [],
+        }
 
-            st.markdown("---")
-            col_a, col_b = st.columns(2)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total Loans Evaluated", metrics["total_loans_evaluated"])
+    m2.metric("Overall Approval Rate", f"{metrics['approval_rate']:.1%}")
+    m3.metric("Average Default Risk", f"{metrics['average_default_probability']:.1%}")
 
-            with col_a:
-                st.subheader("Capital Exposure by Risk Tier")
-                exposure = metrics["exposure_by_risk_tier"]
-                fig_pie = px.pie(
-                    values=list(exposure.values()), 
-                    names=list(exposure.keys()), 
-                    color=list(exposure.keys()),
-                    color_discrete_map={"Low": "#2ecc71", "Medium": "#f1c40f", "High": "#e74c3c"}
-                )
-                st.plotly_chart(fig_pie, use_container_width=True)
+    st.markdown("---")
+    col_a, col_b = st.columns(2)
 
-            with col_b:
-                st.subheader("Recent Applications: Credit Score vs. Risk")
-                if metrics["recent_logs"]:
-                    df_logs = pd.DataFrame(metrics["recent_logs"])
-                    fig_scatter = px.scatter(
-                        df_logs, 
-                        x="credit_score", 
-                        y="default_probability", 
-                        color="risk_tier",
-                        size="loan_amount",
-                        hover_data=["request_id", "decision"],
-                        color_discrete_map={"Low": "#2ecc71", "Medium": "#f1c40f", "High": "#e74c3c"}
-                    )
-                    st.plotly_chart(fig_scatter, use_container_width=True)
-                else:
-                    st.info("No applications logged yet.")
+    with col_a:
+        st.subheader("Capital Exposure by Risk Tier")
+        exposure = metrics["exposure_by_risk_tier"]
+        fig_pie = px.pie(
+            values=list(exposure.values()),
+            names=list(exposure.keys()),
+            color=list(exposure.keys()),
+            color_discrete_map={"Low": "#2ecc71", "Medium": "#f1c40f", "High": "#e74c3c"},
+        )
+        st.plotly_chart(fig_pie, use_container_width=True)
 
-    except Exception as e:
-        st.error(f"Error fetching portfolio metrics: {str(e)}")
+    with col_b:
+        st.subheader("Recent Applications: Credit Score vs. Risk")
+        if metrics["recent_logs"]:
+            df_logs = pd.DataFrame(metrics["recent_logs"])
+            fig_scatter = px.scatter(
+                df_logs,
+                x="credit_score",
+                y="default_probability",
+                color="risk_tier",
+                size="loan_amount",
+                hover_data=["request_id", "decision"],
+                color_discrete_map={"Low": "#2ecc71", "Medium": "#f1c40f", "High": "#e74c3c"},
+            )
+            st.plotly_chart(fig_scatter, use_container_width=True)
+        else:
+            st.info("No applications logged yet.")
 
-# -------------------------------------------------------------------
-# TAB 3: Model Validation & Calibration
-# -------------------------------------------------------------------
-elif tab_selection == "Model Validation & Calibration":
+elif selected_tab == "Model Validation & Calibration":
     st.header("📈 Model Validation & Risk Calibration Metrics")
     st.caption("Quantitative performance benchmarks evaluating discriminatory power and probability calibration.")
 
@@ -170,38 +229,31 @@ elif tab_selection == "Model Validation & Calibration":
         with open(metrics_file, "r") as f:
             m_data = json.load(f)
 
-        # High level score metrics
         k1, k2, k3 = st.columns(3)
         k1.metric("ROC-AUC Score", f"{m_data['roc_auc']:.4f}", help="Measures discrimination power (0.5 = random, 1.0 = perfect)")
         k2.metric("PR-AUC (Avg Precision)", f"{m_data['pr_auc']:.4f}", help="Precision-Recall Area Under Curve")
         k3.metric("Brier Score Loss", f"{m_data['brier_score']:.4f}", help="Measures probability calibration accuracy (lower is better)")
 
         st.markdown("---")
-
         col_c1, col_c2 = st.columns(2)
 
-        # 1. Calibration Curve Plot
         with col_c1:
             st.subheader("Probability Calibration Curve")
             prob_true = m_data["calibration"]["prob_true"]
             prob_pred = m_data["calibration"]["prob_pred"]
 
             fig_cal = go.Figure()
-            # Perfectly calibrated reference line
             fig_cal.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", name="Perfect Calibration", line=dict(dash="dash", color="gray")))
-            # Model calibration line
             fig_cal.add_trace(go.Scatter(x=prob_pred, y=prob_true, mode="lines+markers", name="XGBoost Model", line=dict(color="#2980b9", width=3)))
-            
             fig_cal.update_layout(
                 xaxis_title="Predicted Probability",
                 yaxis_title="True Proportion of Defaults",
                 xaxis=dict(range=[0, 1]),
                 yaxis=dict(range=[0, 1]),
-                legend=dict(x=0.05, y=0.95)
+                legend=dict(x=0.05, y=0.95),
             )
             st.plotly_chart(fig_cal, use_container_width=True)
 
-        # 2. ROC & Precision-Recall Curves
         with col_c2:
             st.subheader("ROC Curve (Receiver Operating Characteristic)")
             fpr = m_data["roc_curve"]["fpr"]
@@ -210,32 +262,29 @@ elif tab_selection == "Model Validation & Calibration":
             fig_roc = go.Figure()
             fig_roc.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", name="Random Chance", line=dict(dash="dash", color="gray")))
             fig_roc.add_trace(go.Scatter(x=fpr, y=tpr, mode="lines", name=f"XGBoost (AUC = {m_data['roc_auc']:.2f})", line=dict(color="#27ae60", width=3)))
-
             fig_roc.update_layout(
                 xaxis_title="False Positive Rate (FPR)",
                 yaxis_title="True Positive Rate (TPR)",
                 xaxis=dict(range=[0, 1]),
                 yaxis=dict(range=[0, 1]),
-                legend=dict(x=0.6, y=0.1)
+                legend=dict(x=0.6, y=0.1),
             )
             st.plotly_chart(fig_roc, use_container_width=True)
-
     else:
-        st.warning("Model metrics file not found. Run 'python train.py' to generate performance benchmarks.")
+        st.info("Model metrics not found yet. Run `python train.py` first.")
 
-# -------------------------------------------------------------------
-# TAB 4: API Audit Logs
-# -------------------------------------------------------------------
-elif tab_selection == "API Audit Logs":
-    st.header("📜 Live DuckDB Prediction Logs")
-    
+else:
+    st.header("🧾 API Audit Logs")
     try:
-        res = requests.get(f"{API_BASE_URL}/portfolio-metrics")
-        if res.status_code == 200:
-            metrics = res.json()
-            if metrics["recent_logs"]:
-                st.dataframe(pd.DataFrame(metrics["recent_logs"]), use_container_width=True)
+        response = requests.get(f"{API_BASE_URL}/portfolio-metrics", timeout=3)
+        if response.status_code == 200:
+            metrics = response.json()
+            logs = metrics.get("recent_logs", [])
+            if logs:
+                st.dataframe(pd.DataFrame(logs), use_container_width=True)
             else:
-                st.info("No audit logs recorded in DuckDB yet.")
-    except Exception as e:
-        st.error(f"Failed to fetch logs: {str(e)}")
+                st.info("No audit logs available yet.")
+        else:
+            st.warning(" API is offline; no audit logs available.")
+    except Exception:
+        st.warning("API is offline; no audit logs available.")
